@@ -1,7 +1,6 @@
 import pkg from "qrcode-terminal";
 import Whatsapp from "whatsapp-web.js";
-import { initializeApp } from "firebase/app";
-import { getDatabase, ref, get, set, child } from "firebase/database";
+import admin from "firebase-admin";
 import { Configuration, OpenAIApi } from "openai";
 import express from "express";
 import qr2 from "qrcode";
@@ -24,19 +23,14 @@ appEx.use(express.urlencoded({ extended: true }));
 // Set up multer for file uploads
 const upload = multer({ dest: 'uploads/' });
 
-const firebaseConfig = {
-    apiKey: process.env.API_KEY,
-    authDomain: process.env.AUTH_DOMAIN,
-    databaseURL: process.env.DATABASE_URL,
-    projectId: process.env.PROJECT_ID,
-    storageBucket: process.env.STORAGE_BUCKET,
-    messagingSenderId: process.env.MESSAGING_SENDER_ID,
-    appId: process.env.APP_ID,
-};
+// Initialize Firebase Admin
+const serviceAccount = JSON.parse(fs.readFileSync('./serviceAccountKey.json', 'utf8'));
+admin.initializeApp({
+    credential: admin.credential.cert(serviceAccount),
+    databaseURL: "https://whatsapp-boot-a7369-default-rtdb.firebaseio.com"
+});
 
-const app = initializeApp(firebaseConfig);
-const database = getDatabase(app);
-const dbRef = ref(database);
+const db = admin.database();
 
 const configuration = new Configuration({
     apiKey: process.env.OPEN_AI_KEY,
@@ -73,7 +67,8 @@ async function handleIncomingMessage(message) {
     const userId = chat.id.user;
 
     // Get existing conversation from Firebase
-    const snapshot = await get(child(dbRef, `/links/test/${userId}`));
+    const chatRef = db.ref(`/links/test/${userId}`);
+    const snapshot = await chatRef.once('value');
     let arr_chat = [];
 
     if (snapshot.exists()) {
@@ -108,7 +103,7 @@ async function handleIncomingMessage(message) {
     });
 
     // Save updated conversation to Firebase
-    await set(ref(database, `/links/test/${userId}`), {
+    await chatRef.set({
         messages: arr_chat,
     });
 }
@@ -139,7 +134,8 @@ appEx.post("/upload", upload.single('csvFile'), async (req, res) => {
 
                 try {
                     // Initialize conversation in Firebase
-                    await set(ref(database, `/links/test/${phoneNumber}`), {
+                    const chatRef = db.ref(`/links/test/${phoneNumber}`);
+                    await chatRef.set({
                         messages: [{
                             role: "system",
                             content: req.body.initialMessage,
