@@ -1,7 +1,8 @@
 import pkg from "qrcode-terminal";
 import Whatsapp from "whatsapp-web.js";
-import admin from "firebase-admin";
-import { Configuration, OpenAIApi } from "openai";
+import { initializeApp } from "firebase/app";
+import { getDatabase, ref, get, set, child } from "firebase/database";
+import { GoogleGenerativeAI } from "@google/generative-ai";
 import express from "express";
 import qr2 from "qrcode";
 import { fileURLToPath } from "url";
@@ -23,20 +24,25 @@ appEx.use(express.urlencoded({ extended: true }));
 // Set up multer for file uploads
 const upload = multer({ dest: 'uploads/' });
 
-// Initialize Firebase Admin
-const serviceAccount = JSON.parse(fs.readFileSync('./serviceAccountKey.json', 'utf8'));
-admin.initializeApp({
-    credential: admin.credential.cert(serviceAccount),
-    databaseURL: "https://whatsapp-boot-a7369-default-rtdb.firebaseio.com"
-});
+// Initialize Firebase
+const firebaseConfig = {
+  apiKey: "AIzaSyAr0WEPJfE7DMyVHc6eF60pJ-GS_2SOn4Q",
+  authDomain: "whatsapp-boot-a7369.firebaseapp.com",
+  databaseURL: "https://whatsapp-boot-a7369-default-rtdb.firebaseio.com",
+  projectId: "whatsapp-boot-a7369",
+  storageBucket: "whatsapp-boot-a7369.firebasestorage.app",
+  messagingSenderId: "1018835050413",
+  appId: "1:1018835050413:web:4937e7d9167789379b8b24",
+  measurementId: "G-WSC5XG8CGV"
+};
 
-const db = admin.database();
+const app = initializeApp(firebaseConfig);
+const database = getDatabase(app);
+const dbRef = ref(database);
 
-const configuration = new Configuration({
-    apiKey: process.env.OPEN_AI_KEY,
-});
-
-const openai = new OpenAIApi(configuration);
+// Initialize Gemini
+const genAI = new GoogleGenerativeAI("AIzaSyCXfLnlvGzfqcOKRNZ859oeGl1qWpNuLpc");
+const model = genAI.getGenerativeModel({ model: "gemini-pro" });
 
 // Global client instance
 let whatsappClient = null;
@@ -67,8 +73,7 @@ async function handleIncomingMessage(message) {
     const userId = chat.id.user;
 
     // Get existing conversation from Firebase
-    const chatRef = db.ref(`/links/test/${userId}`);
-    const snapshot = await chatRef.once('value');
+    const snapshot = await get(child(dbRef, `/links/test/${userId}`));
     let arr_chat = [];
 
     if (snapshot.exists()) {
@@ -87,25 +92,27 @@ async function handleIncomingMessage(message) {
         return;
     }
 
-    // Get AI response
-    const completion = await openai.createChatCompletion({
-        model: "gpt-3.5-turbo",
-        messages: arr_chat,
-    });
+    try {
+        // Get AI response using Gemini
+        const result = await model.generateContent(message.body);
+        const aiResponse = result.response.text();
+        
+        message.reply(aiResponse);
 
-    const aiResponse = completion.data.choices[0].message.content;
-    message.reply(aiResponse);
+        // Add AI response to conversation
+        arr_chat.push({
+            role: "system",
+            content: aiResponse,
+        });
 
-    // Add AI response to conversation
-    arr_chat.push({
-        role: "system",
-        content: aiResponse,
-    });
-
-    // Save updated conversation to Firebase
-    await chatRef.set({
-        messages: arr_chat,
-    });
+        // Save updated conversation to Firebase
+        await set(ref(database, `/links/test/${userId}`), {
+            messages: arr_chat,
+        });
+    } catch (error) {
+        console.error('Error getting AI response:', error);
+        message.reply("I apologize, but I'm having trouble processing your request right now. Please try again later.");
+    }
 }
 
 // Handle CSV upload and bulk messaging
@@ -134,8 +141,7 @@ appEx.post("/upload", upload.single('csvFile'), async (req, res) => {
 
                 try {
                     // Initialize conversation in Firebase
-                    const chatRef = db.ref(`/links/test/${phoneNumber}`);
-                    await chatRef.set({
+                    await set(ref(database, `/links/test/${phoneNumber}`), {
                         messages: [{
                             role: "system",
                             content: req.body.initialMessage,
